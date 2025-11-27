@@ -3,7 +3,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { LogOut, Loader, Monitor, List, Users, Cloud, HardDrive, Edit } from 'lucide-react'; // Added Icons
+import { LogOut, Loader, Monitor, List, Users, Cloud, HardDrive, Edit } from 'lucide-react'; 
 import { api } from '@/lib/api';
 import { formatBytes, formatDate } from '@/lib/utils';
 import Modal from './Modal';
@@ -66,10 +66,6 @@ function LimitModal({ customer, onSave, onClose }) {
             onChange={(e) => setStorage(parseInt(e.target.value) || 100)}
             className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
           />
-          {/* Note: storageUsed is not available in the API response yet, remove the next line for now */}
-          {/* <p className="text-xs text-gray-500 mt-1">
-            Currently using: {formatBytes(customer.storageUsed || 0)}
-          </p> */}
         </div>
       </div>
 
@@ -100,11 +96,14 @@ export default function SuperAdminDashboard({ user, onLogout }) {
         api.get('/api/admin/customers'),
       ]);
       setStats(statsData);
-      setCustomers(customersData);
+      // The customersData is an array, which is correct
+      setCustomers(customersData); 
     } catch (err) {
-      // The error "Not found" is expected due to the api.js bug, but the data is likely loaded.
-      // We will fix api.js, but for now, we catch the error but assume data is partially loaded.
-      console.error('Error loading data:', err);
+      // The error "Not found" is expected if lib/api.js wasn't fully fixed, 
+      // but we log it and keep the dashboard working if possible.
+      console.error('Error loading dashboard data:', err);
+      // If customersData failed, it might be an empty array, which is why the table is blank.
+      // Re-running the deployment check is important.
     }
     setLoading(false);
   }, []);
@@ -141,6 +140,7 @@ export default function SuperAdminDashboard({ user, onLogout }) {
         title="Total Customers" 
         value={stats?.totalCustomers || 0} 
         icon={Users} 
+        // This is what makes the card clickable to switch to the Customers tab
         onClick={() => setTab('customers')} 
       />
       <StatCard 
@@ -206,18 +206,24 @@ export default function SuperAdminDashboard({ user, onLogout }) {
 
   return (
     <div className="min-h-screen bg-gray-950 p-6 md:p-10">
-      <header className="flex justify-between items-center mb-8 pb-4 border-b border-gray-800">
+      {/* 🛑 FIX: Updated Header to include user information */}
+      <header className="flex justify-between items-start mb-8 pb-4 border-b border-gray-800">
         <h1 className="text-3xl font-bold text-white flex items-center gap-3">
           <Cloud className="text-purple-500" size={32} />
           Super Admin Dashboard
         </h1>
-        <button
-          onClick={onLogout}
-          className="flex items-center gap-2 text-red-400 hover:text-red-300 transition"
-        >
-          <LogOut size={20} /> Logout
-        </button>
+        <div className="flex flex-col items-end">
+          <p className="text-white font-medium">{user.name}</p>
+          <p className="text-gray-400 text-sm">{user.email}</p>
+          <button
+            onClick={onLogout}
+            className="flex items-center gap-2 text-red-400 hover:text-red-300 transition mt-2 text-sm"
+          >
+            <LogOut size={16} /> Logout
+          </button>
+        </div>
       </header>
+      {/* ------------------------------------------------ */}
 
       <div className="flex space-x-4 border-b border-gray-800 mb-6">
         {[{ id: 'stats', label: 'Overview', icon: HardDrive }, { id: 'customers', label: 'Customers', icon: Users }].map(t => (
@@ -264,5 +270,3 @@ function StatCard({ title, value, icon: Icon, onClick }) {
         </div>
     );
 }
-
-// END components/SuperAdminDashboard.js
