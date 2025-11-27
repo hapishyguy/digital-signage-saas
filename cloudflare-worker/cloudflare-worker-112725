@@ -1,0 +1,250 @@
+// Digital Signage Backend v2 - Cloudflare Worker
+// Now with InstantDB integration, scheduling, and screen groups
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+  });
+}
+
+function generateCode(length = 6) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
+
+async function hashPassword(password) {
+  const data = new TextEncoder().encode(password);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return btoa(String.fromCharCode(...new Uint8Array(hash)));
+}
+
+async function createJWT(payload, secret) {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const enc = (obj) => btoa(JSON.stringify(obj)).replace(/=/g, '');
+  const body = `${enc(header)}.${enc({ ...payload, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 })}`;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
+  return `${body}.${btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/=/g, '')}`;
+}
+
+async function verifyJWT(token, secret) {
+  try {
+    const [header, payload, sig] = token.split('.');
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+    const valid = await crypto.subtle.verify('HMAC', key, Uint8Array.from(atob(sig), c => c.charCodeAt(0)), new TextEncoder().encode(`${header}.${payload}`));
+    if (!valid) return null;
+    const data = JSON.parse(atob(payload));
+    if (data.exp && data.exp < Date.now()) return null;
+    return data;
+  } catch { return null; }
+}
+
+async function authenticate(request, env) {
+  const auth = request.headers.get('Authorization');
+  if (!auth?.startsWith('Bearer ')) return null;
+  return verifyJWT(auth.slice(7), env.JWT_SECRET);
+}
+
+// === FIX APPLIED HERE: Added 'app-id' to headers and removed 'Bearer' prefix ===
+async function instantDB(env, action, data) {
+  const res = await fetch('https://api.instantdb.com/admin/transact', {
+    method: 'POST',
+    headers: { 
+        'Content-Type': 'application/json', 
+        'Authorization': env.INSTANTDB_ADMIN_TOKEN, // Sent as raw token
+        'app-id': env.INSTANTDB_APP_ID // Sent as header
+    },
+    body: JSON.stringify(data)
+  });
+  return res.json();
+}
+
+async function instantQuery(env, query) {
+  const res = await fetch('https://api.instantdb.com/admin/query', {
+    method: 'POST',
+    headers: { 
+        'Content-Type': 'application/json', 
+        'Authorization': env.INSTANTDB_ADMIN_TOKEN, // Sent as raw token
+        'app-id': env.INSTANTDB_APP_ID // Sent as header
+    },
+    body: JSON.stringify({ query })
+  });
+  return res.json();
+}
+// ==============================================================================
+
+// Get active playlist based on schedule
+function getActivePlaylist(screen, schedules, now = new Date()) {
+  if (!schedules?.length) return screen.defaultPlaylistId;
+  
+  const dayOfWeek = now.getDay(); // 0=Sun, 6=Sat
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  
+  const activeSchedule = schedules
+    .filter(s => s.screenId === screen.id || s.groupId === screen.groupId)
+    .filter(s => {
+      const days = JSON.parse(s.days || '[]');
+      if (!days.includes(dayOfWeek)) return false;
+      const [startH, startM] = s.startTime.split(':').map(Number);
+      const [endH, endM] = s.endTime.split(':').map(Number);
+      const start = startH * 60 + startM;
+      const end = endH * 60 + endM;
+      return currentMinutes >= start && currentMinutes < end;
+    })
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0))[0];
+  
+  return activeSchedule?.playlistId || screen.defaultPlaylistId;
+}
+
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
+
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const method = request.method;
+
+    try {
+      // === SETUP ROUTES ===
+      if (path === '/api/setup/check' && method === 'GET') {
+        const response = await instantQuery(env, { users: { $: { limit: 1 } } });
+        
+        // Handle database errors gracefully
+        if (response.error || response.Error) {
+             const msg = response.error || response.Error;
+             // Return JSON error so frontend doesn't crash on "undefined"
+             return json({ error: `InstantDB Error: ${msg}. Check INSTANTDB_ADMIN_TOKEN and APP_ID.` }, 500);
+        }
+
+        const { users } = response;
+        // If users is undefined, it means the structure is unexpected
+        const setupComplete = Array.isArray(users) && users.length > 0;
+        return json({ setupComplete });
+      }
+
+      if (path === '/api/setup/complete' && method === 'POST') {
+        // Double check setup status
+        const checkRes = await instantQuery(env, { users: { $: { limit: 1 } } });
+        if (checkRes.users && checkRes.users.length > 0) {
+            return json({ error: 'Setup already completed. Please log in.' }, 409);
+        }
+
+        const { email, password, name } = await request.json();
+        
+        if (!email || !password || !name) {
+            return json({ error: 'Missing required fields' }, 400);
+        }
+
+        const id = crypto.randomUUID();
+        const hashedPw = await hashPassword(password);
+
+        // Transaction to create Super Admin
+        const tx = await instantDB(env, 'transact', {
+            steps: [['update', 'users', id, { 
+                email, 
+                password: hashedPw, 
+                name, 
+                role: 'super_admin',
+                limits: JSON.stringify({ screens: 5, playlists: 5, storage: 524288000 }), // 500MB
+                storageUsed: 0,
+                createdAt: Date.now() 
+            }]]
+        });
+
+        if (tx.error || tx.Error) {
+             return json({ error: `Setup Failed: ${tx.error || tx.Error}` }, 500);
+        }
+
+        const token = await createJWT({ userId: id, email, role: 'super_admin' }, env.JWT_SECRET);
+        return json({ token, user: { id, email, name, role: 'super_admin' } });
+      }
+
+      // === AUTH ROUTES ===
+      if (path === '/api/auth/register' && method === 'POST') {
+        const { email, password, name } = await request.json();
+        
+        // Check existing
+        const { users } = await instantQuery(env, { users: { $: { where: { email } } } });
+        if (users && users.length > 0) return json({ error: 'Email already registered' }, 400);
+
+        const id = crypto.randomUUID();
+        const hashedPw = await hashPassword(password);
+        
+        await instantDB(env, 'transact', {
+          steps: [['update', 'users', id, { 
+            email, password: hashedPw, name, 
+            role: 'customer', 
+            limits: JSON.stringify({ screens: 5, playlists: 5, storage: 524288000 }),
+            storageUsed: 0,
+            createdAt: Date.now() 
+          }]]
+        });
+        
+        const token = await createJWT({ userId: id, email, role: 'customer' }, env.JWT_SECRET);
+        return json({ token, user: { id, email, name, role: 'customer' } });
+      }
+
+      if (path === '/api/auth/login' && method === 'POST') {
+        const { email, password } = await request.json();
+        const { users } = await instantQuery(env, { users: { $: { where: { email } } } });
+        const user = users?.[0];
+        
+        if (!user || user.password !== await hashPassword(password)) {
+          return json({ error: 'Invalid credentials' }, 401);
+        }
+        
+        const token = await createJWT({ userId: user.id, email, role: user.role }, env.JWT_SECRET);
+        return json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+      }
+
+      // === AUTHENTICATED ROUTES ===
+      const user = await authenticate(request, env);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+
+      // --- Screen Management ---
+      if (path === '/api/screens/pair' && method === 'POST') {
+        const { code, name } = await request.json();
+        const { screens } = await instantQuery(env, { 
+          screens: { $: { where: { pairingCode: code.toUpperCase(), paired: false } } }
+        });
+        const screen = screens?.[0];
+        
+        if (!screen) return json({ error: 'Invalid code' }, 400);
+        if (Date.now() > screen.codeExpiresAt) return json({ error: 'Code expired' }, 400);
+        
+        await instantDB(env, 'transact', {
+          steps: [['update', 'screens', screen.id, { 
+            userId: user.userId, 
+            name: name || 'My Screen', 
+            paired: true,
+            pairedAt: Date.now() 
+          }]]
+        });
+        
+        return json({ success: true, screenId: screen.id });
+      }
+
+      // --- Screens List ---
+      if (path === '/api/screens' && method === 'GET') {
+        const { screens } = await instantQuery(env, { 
+          screens: { $: { where: { userId: user.userId } } }
+        });
+        return json(screens || []);
+      }
+
+      // --- Other endpoints can be added here as needed ---
+
+      return json({ error: 'Not found' }, 404);
+    } catch (err) {
+      console.error(err);
+      return json({ error: err.message }, 500);
+    }
+  }
+};
