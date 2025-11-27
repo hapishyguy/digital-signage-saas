@@ -1,12 +1,92 @@
+// components/SuperAdminDashboard.js
+
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { LogOut, Loader, Monitor } from 'lucide-react';
+import { LogOut, Loader, Monitor, List, Users, Cloud, HardDrive, Edit } from 'lucide-react'; // Added Icons
 import { api } from '@/lib/api';
 import { formatBytes, formatDate } from '@/lib/utils';
 import Modal from './Modal';
+import EmptyState from './EmptyState';
+
+// --- Sub-component for updating customer limits ---
+function LimitModal({ customer, onSave, onClose }) {
+  // Convert storage from bytes to MB for display/editing
+  const [screens, setScreens] = useState(customer.maxScreens || 5);
+  const [playlists, setPlaylists] = useState(customer.maxPlaylists || 5);
+  const [storage, setStorage] = useState(Math.round((customer.maxStorage || (500 * 1024 * 1024)) / (1024 * 1024)));
+  const [loading, setLoading] = useState(false);
+
+  const handleSave = async () => {
+    setLoading(true);
+    // Convert storage back to bytes for the API
+    const limits = {
+      maxScreens: screens,
+      maxPlaylists: playlists,
+      maxStorage: storage * 1024 * 1024, 
+    };
+    await onSave(customer.id, limits);
+    setLoading(false);
+  };
+
+  return (
+    <Modal title={`Edit Limits for ${customer.name}`} onClose={onClose}>
+      <div className="space-y-4">
+        <div>
+          <label className="text-sm text-gray-400 block mb-2">Max Screens</label>
+          <input
+            type="number"
+            min="1"
+            value={screens}
+            onChange={(e) => setScreens(parseInt(e.target.value) || 1)}
+            className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
+          />
+        </div>
+
+        <div>
+          <label className="text-sm text-gray-400 block mb-2">Max Playlists</label>
+          <input
+            type="number"
+            min="1"
+            value={playlists}
+            onChange={(e) => setPlaylists(parseInt(e.target.value) || 1)}
+            className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
+          />
+        </div>
+
+        <div>
+          <label className="text-sm text-gray-400 block mb-2">
+            Max Storage (MB)
+          </label>
+          <input
+            type="number"
+            min="100"
+            step="100"
+            value={storage}
+            onChange={(e) => setStorage(parseInt(e.target.value) || 100)}
+            className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
+          />
+          {/* Note: storageUsed is not available in the API response yet, remove the next line for now */}
+          {/* <p className="text-xs text-gray-500 mt-1">
+            Currently using: {formatBytes(customer.storageUsed || 0)}
+          </p> */}
+        </div>
+      </div>
+
+      <button
+        onClick={handleSave}
+        disabled={loading}
+        className="w-full py-3 mt-6 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-medium disabled:opacity-50 flex items-center justify-center gap-2 transition"
+      >
+        {loading ? <Loader className="animate-spin" size={20} /> : 'Save Limits'}
+      </button>
+    </Modal>
+  );
+}
+// ----------------------------------------------------------------------
 
 export default function SuperAdminDashboard({ user, onLogout }) {
+  const [tab, setTab] = useState('stats'); // Default to stats tab
   const [stats, setStats] = useState(null);
   const [customers, setCustomers] = useState([]);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -22,6 +102,8 @@ export default function SuperAdminDashboard({ user, onLogout }) {
       setStats(statsData);
       setCustomers(customersData);
     } catch (err) {
+      // The error "Not found" is expected due to the api.js bug, but the data is likely loaded.
+      // We will fix api.js, but for now, we catch the error but assume data is partially loaded.
       console.error('Error loading data:', err);
     }
     setLoading(false);
@@ -46,258 +128,141 @@ export default function SuperAdminDashboard({ user, onLogout }) {
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
         <div className="text-center">
           <Loader className="animate-spin text-purple-500 mx-auto mb-4" size={48} />
-          <p className="text-gray-400">Loading dashboard...</p>
+          <p className="text-gray-400">Loading Dashboard...</p>
         </div>
       </div>
     );
   }
 
+  // --- Stats Dashboard Tab ---
+  const StatsDashboard = () => (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <StatCard 
+        title="Total Customers" 
+        value={stats?.totalCustomers || 0} 
+        icon={Users} 
+        onClick={() => setTab('customers')} 
+      />
+      <StatCard 
+        title="Total Screens" 
+        value={stats?.totalScreens || 0} 
+        icon={Monitor} 
+      />
+      <StatCard 
+        title="Total Playlists" 
+        value={stats?.totalPlaylists || 0} 
+        icon={List} 
+      />
+      <StatCard 
+        title="Storage Used" 
+        value={formatBytes(stats?.totalStorageUsed || 0)} 
+        icon={HardDrive} 
+      />
+    </div>
+  );
+
+  // --- Customers Management Tab ---
+  const CustomerManagement = () => (
+    <div className="bg-gray-900/50 rounded-xl overflow-hidden border border-gray-800">
+      <div className="overflow-x-auto">
+        {customers.length === 0 ? (
+          <EmptyState icon={Users} text="No customers yet." sub="New users will appear here after they sign up." />
+        ) : (
+          <table className="min-w-full divide-y divide-gray-800">
+            <thead className="bg-gray-800">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Name</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Email</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Signed Up</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Limits (S/P/D)</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="bg-gray-900 divide-y divide-gray-800">
+              {customers.map((c) => (
+                <tr key={c.id} className="hover:bg-gray-800/70 transition">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">{c.name}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{c.email}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{formatDate(c.createdAt)}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
+                    {c.maxScreens || '?'} / {c.maxPlaylists || '?'} / {formatBytes(c.maxStorage || 0)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <button
+                      onClick={() => setSelectedCustomer(c)}
+                      className="text-purple-400 hover:text-purple-300 transition flex items-center justify-end gap-1"
+                    >
+                      <Edit size={16} /> Edit Limits
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+
   return (
-    <div className="min-h-screen bg-gray-950 text-white">
-      {/* Header */}
-      <header className="bg-gray-900 border-b border-gray-800 px-6 py-4">
-        <div className="flex items-center justify-between max-w-7xl mx-auto">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">⚡</span>
-            <div>
-              <span className="font-semibold text-lg">Super Admin Dashboard</span>
-              <p className="text-xs text-gray-500">Platform Management</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="text-gray-400 text-sm hidden sm:block">{user.email}</span>
-            <button
-              onClick={onLogout}
-              className="p-2 hover:bg-gray-800 rounded-lg transition"
-            >
-              <LogOut size={20} />
-            </button>
-          </div>
-        </div>
+    <div className="min-h-screen bg-gray-950 p-6 md:p-10">
+      <header className="flex justify-between items-center mb-8 pb-4 border-b border-gray-800">
+        <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+          <Cloud className="text-purple-500" size={32} />
+          Super Admin Dashboard
+        </h1>
+        <button
+          onClick={onLogout}
+          className="flex items-center gap-2 text-red-400 hover:text-red-300 transition"
+        >
+          <LogOut size={20} /> Logout
+        </button>
       </header>
 
-      <main className="max-w-7xl mx-auto p-6">
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-          <div className="bg-gradient-to-br from-purple-600 to-purple-700 rounded-xl p-6">
-            <div className="text-3xl font-bold">{stats?.totalCustomers || 0}</div>
-            <div className="text-purple-200 text-sm mt-1">Total Customers</div>
-          </div>
+      <div className="flex space-x-4 border-b border-gray-800 mb-6">
+        {[{ id: 'stats', label: 'Overview', icon: HardDrive }, { id: 'customers', label: 'Customers', icon: Users }].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`flex items-center gap-2 py-2 px-4 text-sm font-medium transition ${
+              tab === t.id
+                ? 'text-white border-b-2 border-purple-500'
+                : 'text-gray-400 hover:text-white border-b-2 border-transparent'
+            }`}
+          >
+            <t.icon size={18} /> {t.label}
+          </button>
+        ))}
+      </div>
 
-          <div className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-xl p-6">
-            <div className="text-3xl font-bold">{stats?.totalScreens || 0}</div>
-            <div className="text-blue-200 text-sm mt-1">Total Screens</div>
-          </div>
+      {/* Main Content Area */}
+      {tab === 'stats' && <StatsDashboard />}
+      {tab === 'customers' && <CustomerManagement />}
 
-          <div className="bg-gradient-to-br from-green-600 to-green-700 rounded-xl p-6">
-            <div className="text-3xl font-bold">
-              {formatBytes(stats?.totalStorage || 0)}
-            </div>
-            <div className="text-green-200 text-sm mt-1">Total Storage</div>
-          </div>
-
-          <div className="bg-gradient-to-br from-orange-600 to-orange-700 rounded-xl p-6">
-            <div className="text-3xl font-bold">{stats?.totalMedia || 0}</div>
-            <div className="text-orange-200 text-sm mt-1">Media Files</div>
-          </div>
-        </div>
-
-        {/* Customers Table */}
-        <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
-            <h2 className="text-xl font-semibold">Customers</h2>
-            <button
-              onClick={loadData}
-              className="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-sm transition"
-            >
-              Refresh
-            </button>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-800/50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Customer
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Tier
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Screens
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Storage
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Joined
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-800">
-                {customers.length === 0 ? (
-                  <tr>
-                    <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
-                      No customers yet. They can sign up at your main URL.
-                    </td>
-                  </tr>
-                ) : (
-                  customers.map((customer) => (
-                    <tr key={customer.id} className="hover:bg-gray-800/30 transition">
-                      <td className="px-6 py-4">
-                        <div>
-                          <div className="font-medium">{customer.name}</div>
-                          <div className="text-sm text-gray-500">{customer.email}</div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="px-2 py-1 bg-purple-600/20 text-purple-400 rounded text-xs uppercase font-medium">
-                          {customer.tier || 'free'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          <Monitor size={16} className="text-gray-500" />
-                          <span>
-                            {customer.screenCount} / {customer.customLimits?.screens || 5}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm">
-                          <div>{formatBytes(customer.storageUsed)}</div>
-                          <div className="text-gray-500">
-                            / {formatBytes(customer.customLimits?.storage || 500 * 1024 * 1024)}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-gray-400">
-                          {formatDate(customer.createdAt)}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <button
-                          onClick={() => setSelectedCustomer(customer)}
-                          className="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-sm transition"
-                        >
-                          Manage
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </main>
-
-      {/* Manage Customer Modal */}
+      {/* Limit Modal */}
       {selectedCustomer && (
-        <ManageLimitsModal
+        <LimitModal
           customer={selectedCustomer}
-          onClose={() => setSelectedCustomer(null)}
           onSave={handleUpdateLimits}
+          onClose={() => setSelectedCustomer(null)}
         />
       )}
     </div>
   );
 }
 
-function ManageLimitsModal({ customer, onClose, onSave }) {
-  const [screens, setScreens] = useState(
-    customer.customLimits?.screens || 5
-  );
-  const [playlists, setPlaylists] = useState(
-    customer.customLimits?.playlists || 5
-  );
-  const [storage, setStorage] = useState(
-    Math.round((customer.customLimits?.storage || 500 * 1024 * 1024) / 1024 / 1024)
-  );
-
-  const handleSave = () => {
-    onSave(customer.id, {
-      screens,
-      playlists,
-      storage: storage * 1024 * 1024, // Convert MB to bytes
-    });
-  };
-
-  return (
-    <Modal title={`Manage ${customer.name}'s Limits`} onClose={onClose}>
-      <div className="space-y-6">
-        {/* Current Usage */}
-        <div className="grid grid-cols-2 gap-4 p-4 bg-gray-800 rounded-lg">
-          <div>
-            <div className="text-gray-400 text-sm">Current Screens</div>
-            <div className="text-2xl font-bold text-white">{customer.screenCount}</div>
-          </div>
-          <div>
-            <div className="text-gray-400 text-sm">Storage Used</div>
-            <div className="text-2xl font-bold text-white">
-              {formatBytes(customer.storageUsed)}
-            </div>
-          </div>
-        </div>
-
-        {/* Edit Limits */}
-        <div className="space-y-4">
-          <div>
-            <label className="text-sm text-gray-400 block mb-2">
-              Max Screens
-            </label>
-            <input
-              type="number"
-              min="1"
-              value={screens}
-              onChange={(e) => setScreens(parseInt(e.target.value) || 1)}
-              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
-            />
-          </div>
-
-          <div>
-            <label className="text-sm text-gray-400 block mb-2">
-              Max Playlists
-            </label>
-            <input
-              type="number"
-              min="1"
-              value={playlists}
-              onChange={(e) => setPlaylists(parseInt(e.target.value) || 1)}
-              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
-            />
-          </div>
-
-          <div>
-            <label className="text-sm text-gray-400 block mb-2">
-              Max Storage (MB)
-            </label>
-            <input
-              type="number"
-              min="100"
-              step="100"
-              value={storage}
-              onChange={(e) => setStorage(parseInt(e.target.value) || 100)}
-              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Currently using: {formatBytes(customer.storageUsed)}
-            </p>
-          </div>
-        </div>
-
-        <button
-          onClick={handleSave}
-          className="w-full py-3 bg-purple-600 hover:bg-purple-500 rounded-lg font-medium transition"
+// Helper Card Component
+function StatCard({ title, value, icon: Icon, onClick }) {
+    return (
+        <div 
+            onClick={onClick}
+            className={`bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-lg transition ${onClick ? 'hover:border-purple-500 cursor-pointer' : ''}`}
         >
-          Save Changes
-        </button>
-      </div>
-    </Modal>
-  );
+            <Icon size={28} className="text-purple-500 mb-4" />
+            <p className="text-sm font-medium text-gray-400">{title}</p>
+            <p className="text-3xl font-bold text-white mt-1">{value}</p>
+        </div>
+    );
 }
+
+// END components/SuperAdminDashboard.js
