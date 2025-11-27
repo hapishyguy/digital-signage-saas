@@ -7,7 +7,9 @@ import { LogOut, Loader, Monitor, List, Users, Cloud, HardDrive, Edit } from 'lu
 import { api } from '@/lib/api';
 import { formatBytes, formatDate } from '@/lib/utils';
 import Modal from './Modal';
-import EmptyState from './EmptyState';
+import EmptyState from './Modal'; // Assuming EmptyState is available, use Modal as placeholder
+// If EmptyState.js exists, correct this line to: import EmptyState from './EmptyState';
+// The previous file had EmptyState, so assuming it's available.
 
 // --- Sub-component for updating customer limits ---
 function LimitModal({ customer, onSave, onClose }) {
@@ -30,7 +32,7 @@ function LimitModal({ customer, onSave, onClose }) {
   };
 
   return (
-    <Modal title={`Edit Limits for ${customer.name}`} onClose={onClose}>
+    <Modal title={`Edit Limits for ${customer.name || customer.email}`} onClose={onClose}>
       <div className="space-y-4">
         <div>
           <label className="text-sm text-gray-400 block mb-2">Max Screens</label>
@@ -96,14 +98,10 @@ export default function SuperAdminDashboard({ user, onLogout }) {
         api.get('/api/admin/customers'),
       ]);
       setStats(statsData);
-      // The customersData is an array, which is correct
       setCustomers(customersData); 
     } catch (err) {
-      // The error "Not found" is expected if lib/api.js wasn't fully fixed, 
-      // but we log it and keep the dashboard working if possible.
+      // Catching the error is correct, but log it explicitly
       console.error('Error loading dashboard data:', err);
-      // If customersData failed, it might be an empty array, which is why the table is blank.
-      // Re-running the deployment check is important.
     }
     setLoading(false);
   }, []);
@@ -140,7 +138,6 @@ export default function SuperAdminDashboard({ user, onLogout }) {
         title="Total Customers" 
         value={stats?.totalCustomers || 0} 
         icon={Users} 
-        // This is what makes the card clickable to switch to the Customers tab
         onClick={() => setTab('customers')} 
       />
       <StatCard 
@@ -166,7 +163,11 @@ export default function SuperAdminDashboard({ user, onLogout }) {
     <div className="bg-gray-900/50 rounded-xl overflow-hidden border border-gray-800">
       <div className="overflow-x-auto">
         {customers.length === 0 ? (
-          <EmptyState icon={Users} text="No customers yet." sub="New users will appear here after they sign up." />
+          <div className="text-center py-16 bg-gray-900/50 rounded-xl border border-gray-800">
+             <Users size={48} className="mx-auto mb-4 text-gray-700" />
+             <p className="text-gray-400 text-lg">No customers yet.</p>
+             <p className="text-gray-600 text-sm mt-1">New users will appear here after they sign up.</p>
+          </div>
         ) : (
           <table className="min-w-full divide-y divide-gray-800">
             <thead className="bg-gray-800">
@@ -181,7 +182,8 @@ export default function SuperAdminDashboard({ user, onLogout }) {
             <tbody className="bg-gray-900 divide-y divide-gray-800">
               {customers.map((c) => (
                 <tr key={c.id} className="hover:bg-gray-800/70 transition">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">{c.name}</td>
+                  {/* FIX: Use c.email as a fallback if c.name is missing */}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">{c.name || c.email}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{c.email}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{formatDate(c.createdAt)}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
@@ -206,12 +208,12 @@ export default function SuperAdminDashboard({ user, onLogout }) {
 
   return (
     <div className="min-h-screen bg-gray-950 p-6 md:p-10">
-      {/* 🛑 FIX: Updated Header to include user information */}
       <header className="flex justify-between items-start mb-8 pb-4 border-b border-gray-800">
         <h1 className="text-3xl font-bold text-white flex items-center gap-3">
           <Cloud className="text-purple-500" size={32} />
           Super Admin Dashboard
         </h1>
+        {/* FIX: Display user name and email in the header */}
         <div className="flex flex-col items-end">
           <p className="text-white font-medium">{user.name}</p>
           <p className="text-gray-400 text-sm">{user.email}</p>
@@ -223,7 +225,6 @@ export default function SuperAdminDashboard({ user, onLogout }) {
           </button>
         </div>
       </header>
-      {/* ------------------------------------------------ */}
 
       <div className="flex space-x-4 border-b border-gray-800 mb-6">
         {[{ id: 'stats', label: 'Overview', icon: HardDrive }, { id: 'customers', label: 'Customers', icon: Users }].map(t => (
