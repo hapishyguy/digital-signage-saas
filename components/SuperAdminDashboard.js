@@ -7,7 +7,7 @@ import { LogOut, Loader, Monitor, List, Users, Cloud, HardDrive, Edit } from 'lu
 import { api } from '@/lib/api';
 import { formatBytes, formatDate } from '@/lib/utils';
 import Modal from './Modal';
-import EmptyState from './EmptyState'; // Corrected import (assuming EmptyState.js exists)
+import EmptyState from './EmptyState'; // Assuming EmptyState.js exists
 
 // --- Sub-component for updating customer limits ---
 function LimitModal({ customer, onSave, onClose }) {
@@ -68,7 +68,6 @@ function LimitModal({ customer, onSave, onClose }) {
             onChange={(e) => setStorage(parseInt(e.target.value) || 100)}
             className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
           />
-          {/* Note: Added storage usage information back for context in the modal */}
           <p className="text-xs text-gray-500 mt-1">
              Currently using: {formatBytes(customer.storageUsed || 0)}
           </p>
@@ -114,7 +113,7 @@ export default function SuperAdminDashboard({ user, onLogout }) {
     loadData();
   }, [loadData]);
 
-  // THIS IS THE CORRECTED FUNCTION (Optimistic Update)
+  // THIS FUNCTION IS ALREADY CORRECTLY IMPLEMENTED FOR OPTIMISTIC UPDATE
   const handleUpdateLimits = async (customerId, limits) => {
     try {
       // 1. Send the update command to the worker
@@ -198,6 +197,9 @@ export default function SuperAdminDashboard({ user, onLogout }) {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Name</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Email</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Signed Up</th>
+                {/* <<< NEW HEADER >>> */}
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Last Login</th> 
+                {/* <<< END NEW HEADER >>> */}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Limits (S/P/D)</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
               </tr>
@@ -209,6 +211,11 @@ export default function SuperAdminDashboard({ user, onLogout }) {
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">{c.name || c.email}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{c.email}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{formatDate(c.createdAt)}</td>
+                  {/* <<< NEW CELL >>> */}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
+                    {formatDate(c.lastLogin)}
+                  </td>
+                  {/* <<< END NEW CELL >>> */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
                     {c.maxScreens || '?'} / {c.maxPlaylists || '?'} / {formatBytes(c.maxStorage || 0)}
                   </td>
