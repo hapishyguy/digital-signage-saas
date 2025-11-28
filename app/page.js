@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Loader } from 'lucide-react';
 import { api } from '@/lib/api';
 import SetupWizard from '@/components/SetupWizard';
@@ -13,27 +13,64 @@ export default function Home() {
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
 
-  useEffect(() => {
-    // Check if setup is complete
-    api.get('/api/setup/check')
-      .then(data => {
-        setSetupComplete(data.setupComplete);
-        setChecking(false);
-      })
-      .catch(() => {
-        setSetupComplete(false);
-        setChecking(false);
-      });
+  // --- NEW: Auto-login logic to restore session from stored token ---
+  const attemptAutoLogin = useCallback(async () => {
+    // api.js constructor loads the token from localStorage on initialization.
+    // If the token is present, we try to validate it with the server.
+    if (!api.token) {
+      return; 
+    }
+
+    try {
+      // 1. Use the stored token to fetch user info and validate session
+      const userInfo = await api.get('/api/user/info');
+      // 2. Token is valid, restore session
+      setUser(userInfo.user);
+    } catch (error) {
+      // 3. Token is expired or invalid (e.g., 401). Clear it and proceed to login.
+      console.error('Auto-login failed. Clearing expired token:', error.message);
+      api.clearToken();
+      setUser(null);
+    }
   }, []);
 
+  useEffect(() => {
+    async function initializeApp() {
+      setChecking(true);
+      
+      // 1. Check if setup is complete
+      let isSetupComplete = false;
+      try {
+        const setupData = await api.get('/api/setup/check');
+        isSetupComplete = setupData.setupComplete;
+        setSetupComplete(isSetupComplete);
+      } catch (error) {
+        // If API call fails completely, assume not set up or temporary failure
+        setSetupComplete(false);
+        setChecking(false);
+        return;
+      }
+
+      // 2. If setup is complete, attempt to auto-login using stored token
+      if (isSetupComplete) {
+        await attemptAutoLogin();
+      }
+
+      setChecking(false);
+    }
+
+    initializeApp();
+  }, [attemptAutoLogin]); 
+  // --- END NEW LOGIC ---
+
   const handleSetupComplete = (userData) => {
-    api.setToken(userData.token);
+    // api.setToken is called inside the wizard, but this ensures state is set
     setUser(userData.user);
     setSetupComplete(true);
   };
 
   const handleAuth = (userData) => {
-    api.setToken(userData.token);
+    // Ensure the token is set on a successful login/register
     setUser(userData.user);
   };
 
@@ -64,11 +101,11 @@ export default function Home() {
     return <AuthScreen onAuth={handleAuth} />;
   }
 
-  // Super admin dashboard
+  // Dashboard (Super Admin or Customer)
   if (user.role === 'super_admin') {
     return <SuperAdminDashboard user={user} onLogout={handleLogout} />;
   }
-
-  // Customer dashboard
+  
+  // Default to Customer Dashboard
   return <CustomerDashboard user={user} onLogout={handleLogout} />;
 }
