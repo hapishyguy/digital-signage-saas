@@ -112,11 +112,29 @@ export default function SuperAdminDashboard({ user, onLogout }) {
 
   const handleUpdateLimits = async (customerId, limits) => {
     try {
+      // 1. Send the update command to the worker
       await api.put(`/api/admin/customers/${customerId}/limits`, limits);
-      await loadData();
+      
+      // 2. Optimistically update the local state immediately to prevent visual flicker/revert
+      // Note: The modal sends maxStorage in MB, but the customer list displays in Bytes, so we must convert for the state.
+      setCustomers(prevCustomers => prevCustomers.map(c => 
+        c.id === customerId 
+          ? { 
+              ...c, 
+              maxScreens: limits.maxScreens, 
+              maxPlaylists: limits.maxPlaylists, 
+              maxStorage: limits.maxStorage * 1024 * 1024 // Convert MB (from modal) to Bytes (for table display)
+            } 
+          : c
+      ));
+
+      // 3. Close the modal
       setSelectedCustomer(null);
+
     } catch (err) {
       alert('Error updating limits: ' + err.message);
+      // Re-load data if update failed to revert optimistic change
+      await loadData(); 
     }
   };
 
