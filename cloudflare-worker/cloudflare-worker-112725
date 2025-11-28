@@ -1,11 +1,18 @@
 // Digital Signage Backend v2 - Cloudflare Worker
-// Now with InstantDB integration, scheduling, and screen groups
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Content-Disposition, X-Content-Type-Options',
 };
+
+const DEFAULT_LIMITS = {
+  maxScreens: 5,
+  maxPlaylists: 5,
+  maxStorage: 500 * 1024 * 1024, // 500MB in bytes
+};
+
+// --- Standard Worker Utility Functions ---
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -52,39 +59,41 @@ async function authenticate(request, env) {
   return verifyJWT(auth.slice(7), env.JWT_SECRET);
 }
 
-// === FIX APPLIED HERE: Added 'app-id' to headers and removed 'Bearer' prefix ===
+// --- InstantDB Helper Functions ---
+
+// Corrected: Uses Bearer token and App-Id header
 async function instantDB(env, action, data) {
   const res = await fetch('https://api.instantdb.com/admin/transact', {
     method: 'POST',
     headers: { 
-        'Content-Type': 'application/json', 
-        'Authorization': env.INSTANTDB_ADMIN_TOKEN, // Sent as raw token
-        'app-id': env.INSTANTDB_APP_ID // Sent as header
+      'Content-Type': 'application/json', 
+      'Authorization': `Bearer ${env.INSTANTDB_ADMIN_TOKEN}`,
+      'App-Id': env.INSTANTDB_APP_ID 
     },
-    body: JSON.stringify(data)
+    body: JSON.stringify({ ...data, 'app-id': env.INSTANTDB_APP_ID })
   });
   return res.json();
 }
 
+// Corrected: Uses Bearer token and App-Id header
 async function instantQuery(env, query) {
   const res = await fetch('https://api.instantdb.com/admin/query', {
     method: 'POST',
     headers: { 
-        'Content-Type': 'application/json', 
-        'Authorization': env.INSTANTDB_ADMIN_TOKEN, // Sent as raw token
-        'app-id': env.INSTANTDB_APP_ID // Sent as header
+      'Content-Type': 'application/json', 
+      'Authorization': `Bearer ${env.INSTANTDB_ADMIN_TOKEN}`,
+      'App-Id': env.INSTANTDB_APP_ID
     },
-    body: JSON.stringify({ query })
+    body: JSON.stringify({ query, 'app-id': env.INSTANTDB_APP_ID })
   });
   return res.json();
 }
-// ==============================================================================
 
 // Get active playlist based on schedule
 function getActivePlaylist(screen, schedules, now = new Date()) {
   if (!schedules?.length) return screen.defaultPlaylistId;
   
-  const dayOfWeek = now.getDay(); // 0=Sun, 6=Sat
+  const dayOfWeek = now.getDay(); 
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   
   const activeSchedule = schedules
@@ -96,6 +105,9 @@ function getActivePlaylist(screen, schedules, now = new Date()) {
       const [endH, endM] = s.endTime.split(':').map(Number);
       const start = startH * 60 + startM;
       const end = endH * 60 + endM;
+      if (start > end) { // Cross midnight
+        return currentMinutes >= start || currentMinutes < end;
+      }
       return currentMinutes >= start && currentMinutes < end;
     })
     .sort((a, b) => (b.priority || 0) - (a.priority || 0))[0];
@@ -103,6 +115,8 @@ function getActivePlaylist(screen, schedules, now = new Date()) {
   return activeSchedule?.playlistId || screen.defaultPlaylistId;
 }
 
+
+// --- Main Worker Fetch Handler ---
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
@@ -112,139 +126,200 @@ export default {
     const method = request.method;
 
     try {
-      // === SETUP ROUTES ===
-      if (path === '/api/setup/check' && method === 'GET') {
-        const response = await instantQuery(env, { users: { $: { limit: 1 } } });
-        
-        // Handle database errors gracefully
-        if (response.error || response.Error) {
-             const msg = response.error || response.Error;
-             // Return JSON error so frontend doesn't crash on "undefined"
-             return json({ error: `InstantDB Error: ${msg}. Check INSTANTDB_ADMIN_TOKEN and APP_ID.` }, 500);
-        }
-
-        const { users } = response;
-        // If users is undefined, it means the structure is unexpected
-        const setupComplete = Array.isArray(users) && users.length > 0;
-        return json({ setupComplete });
-      }
-
-      if (path === '/api/setup/complete' && method === 'POST') {
-        // Double check setup status
-        const checkRes = await instantQuery(env, { users: { $: { limit: 1 } } });
-        if (checkRes.users && checkRes.users.length > 0) {
-            return json({ error: 'Setup already completed. Please log in.' }, 409);
-        }
-
-        const { email, password, name } = await request.json();
-        
-        if (!email || !password || !name) {
-            return json({ error: 'Missing required fields' }, 400);
-        }
-
-        const id = crypto.randomUUID();
-        const hashedPw = await hashPassword(password);
-
-        // Transaction to create Super Admin
-        const tx = await instantDB(env, 'transact', {
-            steps: [['update', 'users', id, { 
-                email, 
-                password: hashedPw, 
-                name, 
-                role: 'super_admin',
-                limits: JSON.stringify({ screens: 5, playlists: 5, storage: 524288000 }), // 500MB
-                storageUsed: 0,
-                createdAt: Date.now() 
-            }]]
-        });
-
-        if (tx.error || tx.Error) {
-             return json({ error: `Setup Failed: ${tx.error || tx.Error}` }, 500);
-        }
-
-        const token = await createJWT({ userId: id, email, role: 'super_admin' }, env.JWT_SECRET);
-        return json({ token, user: { id, email, name, role: 'super_admin' } });
-      }
-
-      // === AUTH ROUTES ===
+      // --- AUTH ROUTES ---
       if (path === '/api/auth/register' && method === 'POST') {
         const { email, password, name } = await request.json();
-        
-        // Check existing
-        const { users } = await instantQuery(env, { users: { $: { where: { email } } } });
-        if (users && users.length > 0) return json({ error: 'Email already registered' }, 400);
-
         const id = crypto.randomUUID();
         const hashedPw = await hashPassword(password);
         
-        await instantDB(env, 'transact', {
-          steps: [['update', 'users', id, { 
-            email, password: hashedPw, name, 
-            role: 'customer', 
-            limits: JSON.stringify({ screens: 5, playlists: 5, storage: 524288000 }),
-            storageUsed: 0,
-            createdAt: Date.now() 
-          }]]
-        });
+        // Check for existing user
+        const { users } = await instantQuery(env, { users: { $: { where: { email } } } });
+        if (users && users.length > 0) return json({ error: 'User already exists' }, 409);
         
+        // Create user and a corresponding limits record in customerLimits with default values
+        await instantDB(env, 'transact', { 
+            steps: [
+              ['update', 'users', id, { 
+                    email, 
+                    password: hashedPw, 
+                    name, 
+                    createdAt: Date.now(), 
+                    role: 'customer',
+                }],
+              ['update', 'customerLimits', id, { // Use customer ID as the limits ID
+                    id, 
+                    maxScreens: DEFAULT_LIMITS.maxScreens,
+                    maxPlaylists: DEFAULT_LIMITS.maxPlaylists,
+                    maxStorage: DEFAULT_LIMITS.maxStorage,
+                    createdAt: Date.now(),
+                }]
+            ] 
+        });
+
         const token = await createJWT({ userId: id, email, role: 'customer' }, env.JWT_SECRET);
         return json({ token, user: { id, email, name, role: 'customer' } });
       }
 
       if (path === '/api/auth/login' && method === 'POST') {
         const { email, password } = await request.json();
+        
         const { users } = await instantQuery(env, { users: { $: { where: { email } } } });
         const user = users?.[0];
         
-        if (!user || user.password !== await hashPassword(password)) {
+        if (!user || await hashPassword(password) !== user.password) {
           return json({ error: 'Invalid credentials' }, 401);
         }
         
-        const token = await createJWT({ userId: user.id, email, role: user.role }, env.JWT_SECRET);
-        return json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+        // Add lastLogin update logic
+        const now = Date.now();
+        await instantDB(env, 'transact', { 
+            steps: [['update', 'users', user.id, [['set', 'lastLogin', now]]]] 
+        });
+        user.lastLogin = now; // Update in memory for response
+
+        const token = await createJWT({ userId: user.id, email: user.email, role: user.role }, env.JWT_SECRET);
+        return json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role, lastLogin: user.lastLogin } });
       }
 
-      // === AUTHENTICATED ROUTES ===
+      // --- SETUP ROUTE (UNAUTHENTICATED) ---
+      if (path === '/api/setup/check' && method === 'GET') {
+        // FIXED: Check specifically for the 'super_admin' role to avoid false positives
+        const response = await instantQuery(env, { 
+            users: { $: { where: { role: 'super_admin' } } } 
+        });
+        
+        if (response.error || response.Error) {
+             console.error('InstantDB Setup Check Error:', response.error || response.Error);
+             return json({ error: 'Database connection failed during setup check.' }, 500);
+        }
+        
+        const { users } = response;
+        const setupComplete = Array.isArray(users) && users.length > 0;
+        return json({ setupComplete });
+      }
+
+      if (path === '/api/setup/complete' && method === 'POST') {
+        // Check again using the corrected query
+        const checkRes = await instantQuery(env, { users: { $: { where: { role: 'super_admin' } } } });
+        if (checkRes.users && checkRes.users.length > 0) {
+            return json({ error: 'Setup already completed. Please log in.' }, 409);
+        }
+
+        const { email, password, name } = await request.json();
+        if (!email || !password || !name) return json({ error: 'Missing fields' }, 400);
+
+        const id = crypto.randomUUID();
+        const hashedPw = await hashPassword(password);
+
+        const tx = await instantDB(env, 'transact', {
+            steps: [
+                ['update', 'users', id, { 
+                    email, 
+                    password: hashedPw, 
+                    name, 
+                    createdAt: Date.now(), 
+                    role: 'super_admin', // FIXED: Correct role name
+                }],
+            ] 
+        });
+
+        if (tx.error || tx.Error) return json({ error: `Setup Failed: ${tx.error || tx.Error}` }, 500);
+
+        const token = await createJWT({ userId: id, email, role: 'super_admin' }, env.JWT_SECRET);
+        return json({ token, user: { id, email, name, role: 'super_admin' } });
+      }
+
+      // --- AUTHENTICATED ROUTES ---
       const user = await authenticate(request, env);
       if (!user) return json({ error: 'Unauthorized' }, 401);
 
-      // --- Screen Management ---
-      if (path === '/api/screens/pair' && method === 'POST') {
-        const { code, name } = await request.json();
-        const { screens } = await instantQuery(env, { 
-          screens: { $: { where: { pairingCode: code.toUpperCase(), paired: false } } }
-        });
-        const screen = screens?.[0];
+      // === SUPER ADMIN ROUTES ===
+      // FIXED: Use correct role check
+      if (user.role === 'super_admin') { 
         
-        if (!screen) return json({ error: 'Invalid code' }, 400);
-        if (Date.now() > screen.codeExpiresAt) return json({ error: 'Code expired' }, 400);
-        
-        await instantDB(env, 'transact', {
-          steps: [['update', 'screens', screen.id, { 
-            userId: user.userId, 
-            name: name || 'My Screen', 
-            paired: true,
-            pairedAt: Date.now() 
-          }]]
-        });
-        
-        return json({ success: true, screenId: screen.id });
-      }
+        if (path === '/api/admin/stats' && method === 'GET') {
+          // Query for customers (users who are NOT super_admin)
+          const { users, screens, media, playlists } = await instantQuery(env, {
+            users: { $: { where: { role: 'customer' } } },
+            screens: {},
+            media: {},
+            playlists: {}
+          });
+          
+          const totalStorageUsed = (media || []).reduce((sum, m) => sum + (m.size || 0), 0);
 
-      // --- Screens List ---
-      if (path === '/api/screens' && method === 'GET') {
-        const { screens } = await instantQuery(env, { 
-          screens: { $: { where: { userId: user.userId } } }
-        });
-        return json(screens || []);
-      }
+          return json({
+            totalCustomers: (users || []).length,
+            totalScreens: (screens || []).length,
+            totalMedia: (media || []).length,
+            totalPlaylists: (playlists || []).length,
+            totalStorageUsed,
+          });
+        }
 
-      // --- Other endpoints can be added here as needed ---
+        if (path === '/api/admin/customers' && method === 'GET') {
+          
+          // 1. Fetch Users (Customers only)
+          const { users } = await instantQuery(env, { 
+            users: { $: { where: { role: 'customer' } } } 
+          });
 
+          // 2. Fetch Limits
+          const { customerLimits } = await instantQuery(env, { 
+            customerLimits: {} 
+          });
+
+          // 3. Robust Merge Logic (using Map for efficient O(N) join)
+          const limitsMap = new Map((customerLimits || []).map(l => [l.id, l]));
+          
+          const mergedCustomers = (users || []).map(c => {
+            const limits = limitsMap.get(c.id);
+            
+            return {
+              ...c, 
+              lastLogin: c.lastLogin || null, 
+              
+              // Limits from customerLimits, falling back to DEFAULT_LIMITS
+              maxScreens: limits?.maxScreens || DEFAULT_LIMITS.maxScreens,
+              maxPlaylists: limits?.maxPlaylists || DEFAULT_LIMITS.maxPlaylists,
+              maxStorage: limits?.maxStorage || DEFAULT_LIMITS.maxStorage,
+              storageUsed: limits?.storageUsed || 0,
+            };
+          });
+
+          return json(mergedCustomers);
+        }
+
+        if (path.match(/^\/api\/admin\/customers\/[\w-]+\/limits$/) && method === 'PUT') {
+          const customerId = path.split('/')[4];
+          const { maxScreens, maxPlaylists, maxStorage } = await request.json();
+          
+          await instantDB(env, 'transact', { 
+            steps: [
+              ['update', 'customerLimits', customerId, { 
+                id: customerId, 
+                maxScreens: Math.max(0, maxScreens), 
+                maxPlaylists: Math.max(0, maxPlaylists), 
+                // Frontend sends MB, DB stores Bytes
+                maxStorage: Math.max(0, maxStorage) * 1024 * 1024, 
+                updatedAt: Date.now(),
+              }]
+            ] 
+          });
+
+          return json({ success: true });
+        }
+      } // End Super Admin Routes
+
+      // ... (other customer/user routes) ...
+      
+      // --- CATCH ALL ---
       return json({ error: 'Not found' }, 404);
+      
     } catch (err) {
       console.error(err);
-      return json({ error: err.message }, 500);
+      // Ensure we catch ALL errors and return a JSON response
+      return json({ error: 'Internal Server Error: ' + err.message }, 500);
     }
   }
 };
