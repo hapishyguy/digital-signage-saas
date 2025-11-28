@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { LogOut, Loader, Monitor, List, Users, Cloud, HardDrive, Edit } from 'lucide-react'; 
 import { api } from '@/lib/api';
-import { formatBytes, formatDate } from '@/lib/utils';
+import { formatBytes, formatDate } from '@/lib/utils'; // Ensure formatDate is available in your utils.js
 import Modal from './Modal';
 import EmptyState from './EmptyState'; // Assuming EmptyState.js exists
 
@@ -98,12 +98,11 @@ export default function SuperAdminDashboard({ user, onLogout }) {
     try {
       const [statsData, customersData] = await Promise.all([
         api.get('/api/admin/stats'),
-        api.get('/api/admin/customers'),
+        api.get('/api/admin/customers'), // This call now returns merged data
       ]);
       setStats(statsData);
       setCustomers(customersData); 
     } catch (err) {
-      // Catching the error is correct, but log it explicitly
       console.error('Error loading dashboard data:', err);
     }
     setLoading(false);
@@ -113,21 +112,20 @@ export default function SuperAdminDashboard({ user, onLogout }) {
     loadData();
   }, [loadData]);
 
-  // THIS FUNCTION IS ALREADY CORRECTLY IMPLEMENTED FOR OPTIMISTIC UPDATE
   const handleUpdateLimits = async (customerId, limits) => {
     try {
       // 1. Send the update command to the worker
       await api.put(`/api/admin/customers/${customerId}/limits`, limits);
       
-      // 2. Optimistically update the local state immediately to prevent visual flicker/revert
-      // Note: The modal sends maxStorage in MB, but the customer list displays in Bytes, so we must convert for the state.
+      // 2. Optimistically update the local state immediately
       setCustomers(prevCustomers => prevCustomers.map(c => 
         c.id === customerId 
           ? { 
               ...c, 
               maxScreens: limits.maxScreens, 
               maxPlaylists: limits.maxPlaylists, 
-              maxStorage: limits.maxStorage * 1024 * 1024 // Convert MB (from modal) to Bytes (for table display)
+              // Convert MB (from modal) to Bytes (for table display)
+              maxStorage: limits.maxStorage * 1024 * 1024 
             } 
           : c
       ));
@@ -197,9 +195,7 @@ export default function SuperAdminDashboard({ user, onLogout }) {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Name</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Email</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Signed Up</th>
-                {/* <<< NEW HEADER >>> */}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Last Login</th> 
-                {/* <<< END NEW HEADER >>> */}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Limits (S/P/D)</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
               </tr>
@@ -207,16 +203,15 @@ export default function SuperAdminDashboard({ user, onLogout }) {
             <tbody className="bg-gray-900 divide-y divide-gray-800">
               {customers.map((c) => (
                 <tr key={c.id} className="hover:bg-gray-800/70 transition">
-                  {/* FIX: Use c.email as a fallback if c.name is missing */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">{c.name || c.email}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{c.email}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">{formatDate(c.createdAt)}</td>
-                  {/* <<< NEW CELL >>> */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
+                    {/* Display Last Login. formatDate handles null/undefined with 'N/A' */}
                     {formatDate(c.lastLogin)}
                   </td>
-                  {/* <<< END NEW CELL >>> */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
+                    {/* Display Limits from merged data */}
                     {c.maxScreens || '?'} / {c.maxPlaylists || '?'} / {formatBytes(c.maxStorage || 0)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -243,7 +238,6 @@ export default function SuperAdminDashboard({ user, onLogout }) {
           <Cloud className="text-purple-500" size={32} />
           Super Admin Dashboard
         </h1>
-        {/* FIX: Display user name and email in the header */}
         <div className="flex flex-col items-end">
           <p className="text-white font-medium">{user.name}</p>
           <p className="text-gray-400 text-sm">{user.email}</p>
