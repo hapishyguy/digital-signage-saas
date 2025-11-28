@@ -7,26 +7,26 @@ import { LogOut, Loader, Monitor, List, Users, Cloud, HardDrive, Edit } from 'lu
 import { api } from '@/lib/api';
 import { formatBytes, formatDate } from '@/lib/utils';
 import Modal from './Modal';
-import EmptyState from './Modal'; // Assuming EmptyState is available, use Modal as placeholder
-// If EmptyState.js exists, correct this line to: import EmptyState from './EmptyState';
-// The previous file had EmptyState, so assuming it's available.
+import EmptyState from './EmptyState'; // Corrected import (assuming EmptyState.js exists)
 
 // --- Sub-component for updating customer limits ---
 function LimitModal({ customer, onSave, onClose }) {
   // Convert storage from bytes to MB for display/editing
   const [screens, setScreens] = useState(customer.maxScreens || 5);
   const [playlists, setPlaylists] = useState(customer.maxPlaylists || 5);
-  const [storage, setStorage] = useState(Math.round((customer.maxStorage || (500 * 1024 * 1024)) / (1024 * 1024)));
+  // Storage is converted from Bytes to MB for the input field
+  const [storage, setStorage] = useState(Math.round((customer.maxStorage || (500 * 1024 * 1024)) / (1024 * 1024))); 
   const [loading, setLoading] = useState(false);
 
   const handleSave = async () => {
     setLoading(true);
-    // Convert storage back to bytes for the API
+    // Note: We are sending the limits in the units the modal uses (MB for storage)
     const limits = {
       maxScreens: screens,
       maxPlaylists: playlists,
-      maxStorage: storage * 1024 * 1024, 
+      maxStorage: storage, // Send MB value
     };
+    // The Cloudflare Worker handles the conversion of MB back to Bytes for database storage
     await onSave(customer.id, limits);
     setLoading(false);
   };
@@ -68,6 +68,10 @@ function LimitModal({ customer, onSave, onClose }) {
             onChange={(e) => setStorage(parseInt(e.target.value) || 100)}
             className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
           />
+          {/* Note: Added storage usage information back for context in the modal */}
+          <p className="text-xs text-gray-500 mt-1">
+             Currently using: {formatBytes(customer.storageUsed || 0)}
+          </p>
         </div>
       </div>
 
@@ -110,6 +114,7 @@ export default function SuperAdminDashboard({ user, onLogout }) {
     loadData();
   }, [loadData]);
 
+  // THIS IS THE CORRECTED FUNCTION (Optimistic Update)
   const handleUpdateLimits = async (customerId, limits) => {
     try {
       // 1. Send the update command to the worker
@@ -181,11 +186,11 @@ export default function SuperAdminDashboard({ user, onLogout }) {
     <div className="bg-gray-900/50 rounded-xl overflow-hidden border border-gray-800">
       <div className="overflow-x-auto">
         {customers.length === 0 ? (
-          <div className="text-center py-16 bg-gray-900/50 rounded-xl border border-gray-800">
-             <Users size={48} className="mx-auto mb-4 text-gray-700" />
-             <p className="text-gray-400 text-lg">No customers yet.</p>
-             <p className="text-gray-600 text-sm mt-1">New users will appear here after they sign up.</p>
-          </div>
+          <EmptyState 
+             icon={Users} 
+             text="No customers yet." 
+             sub="New users will appear here after they sign up."
+          />
         ) : (
           <table className="min-w-full divide-y divide-gray-800">
             <thead className="bg-gray-800">
