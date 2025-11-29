@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Loader } from 'lucide-react';
 import { api } from '@/lib/api';
 import SetupWizard from '@/components/SetupWizard';
@@ -12,49 +12,71 @@ export default function Home() {
   const [setupComplete, setSetupComplete] = useState(null);
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
+  
+  // Flag to know if we are fetching user data for the first time
+  const [authChecked, setAuthChecked] = useState(false); 
 
-  // CRITICAL FIX: Handle initial token loading and check entirely in useEffect
+  const handleLogout = useCallback(() => {
+    api.clearToken();
+    setUser(null);
+  }, []);
+
+  // Main Authentication and Data Fetching Logic
+  const checkAuthAndLoadUser = useCallback(async () => {
+    // 1. Check if token exists in storage
+    const token = api.token; // Accesses token from localStorage via the api instance
+    if (!token) {
+        setUser(null);
+        setAuthChecked(true);
+        return;
+    }
+    
+    // 2. Token exists, try to fetch user info
+    try {
+        const userInfo = await api.get('/api/user/info');
+        setUser(userInfo.user);
+    } catch (error) {
+        // If token is invalid/expired, API returns 401/404/error, so we log out locally
+        console.error("Token invalid or expired, logging out:", error);
+        handleLogout();
+    } finally {
+        setAuthChecked(true);
+    }
+  }, [handleLogout]);
+
+
+  // Initial Setup Check and Auth Check
   useEffect(() => {
-    async function initialCheck() {
-      // 1. Check for cached token and set it on the API instance
-      if (typeof window !== 'undefined') {
-        const cachedToken = localStorage.getItem('authToken');
-        if (cachedToken) {
-          api.setToken(cachedToken);
-        }
-      }
-
-      // 2. Perform Setup Check and optionally fetch user data
+    const checkSetup = async () => {
       try {
+        // First, check if the system requires setup
         const setupData = await api.get('/api/setup/check');
         setSetupComplete(setupData.setupComplete);
-
-        // If a token was present (and validated by the check above), 
-        // try to get user info immediately to authenticate the session.
-        if (api.token) {
-          try {
-            const userData = await api.get('/api/user/info');
-            setUser(userData.user);
-          } catch (e) {
-            // If token is invalid or expired, clear it
-            api.clearToken();
-            setUser(null);
-          }
+        
+        // If setup is complete, immediately try to authenticate
+        if (setupData.setupComplete) {
+            await checkAuthAndLoadUser();
+        } else {
+            // If setup is NOT complete, we skip auth check and just wait for setup
+            setAuthChecked(true);
         }
+
       } catch (e) {
-        // If the API call itself fails (e.g., worker is down), assume setup is not complete
-        console.error('Initial API check failed:', e);
-        setSetupComplete(false);
+        // If the API call fails entirely (e.g., bad config.js URL or worker error)
+        console.error('Initial setup/API check failed:', e);
+        // Default to showing setup in case of failure, as it contains the key config values
+        setSetupComplete(false); 
+        setAuthChecked(true);
       } finally {
         setChecking(false);
       }
-    }
+    };
 
-    initialCheck();
-  }, []); // Run only on mount
+    checkSetup();
+  }, [checkAuthAndLoadUser]);
+
 
   const handleSetupComplete = (userData) => {
-    // Token is set by the SetupWizard itself, but we ensure it here too
     api.setToken(userData.token);
     setUser(userData.user);
     setSetupComplete(true);
@@ -65,38 +87,38 @@ export default function Home() {
     setUser(userData.user);
   };
 
-  const handleLogout = () => {
-    api.clearToken();
-    setUser(null);
-  };
+
+  // --- Render Logic ---
 
   // Loading state
-  if (checking) {
+  if (checking || !authChecked) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
         <div className="text-center">
           <Loader className="animate-spin text-purple-500 mx-auto mb-4" size={48} />
-          <p className="text-gray-400">Loading...</p>
+          <p className="text-gray-400">Loading Application State...</p>
         </div>
       </div>
     );
   }
 
-  // Setup wizard (first time only)
+  // 1. Setup wizard (first time only)
   if (!setupComplete) {
     return <SetupWizard onComplete={handleSetupComplete} />;
   }
 
-  // Auth screen (login/signup)
+  // 2. Auth screen (login/signup) - Shown if setup is complete but no user is logged in
   if (!user) {
     return <AuthScreen onAuth={handleAuth} />;
   }
 
-  // Super Admin Dashboard
-  if (user.role === 'superadmin') {
+  // 3. Dashboards
+  if (user.role === 'super_admin') {
     return <SuperAdminDashboard user={user} onLogout={handleLogout} />;
+  } else if (user.role === 'customer') {
+    return <CustomerDashboard user={user} onLogout={handleLogout} />;
   }
 
-  // Customer Dashboard
-  return <CustomerDashboard user={user} onLogout={handleLogout} />;
+  // Fallback to Auth screen if role is unknown
+  return <AuthScreen onAuth={handleAuth} />;
 }
