@@ -29,9 +29,7 @@ export default function Home() {
             const userData = await api.get('/api/user/info');
             setUser(userData); // Hydrate user state with successful response
           } catch (tokenError) {
-            // If the token is invalid (401), api.js clears it.
-            // We just ensure user is null, forcing the login screen.
-            console.warn('Stored token failed verification, forcing re-auth.');
+            // If the token is invalid (401), api.js clears it. Force login screen.
             api.clearToken();
             setUser(null);
           }
@@ -39,9 +37,9 @@ export default function Home() {
       } catch (err) {
         // Handle API initialization errors (e.g., Worker is down/unreachable)
         console.error("Initialization error:", err);
-        setSetupComplete(false);
+        // Force setup=false if we can't connect, so user can try setup again
+        setSetupComplete(false); 
       } finally {
-        // Set checking to false to render the appropriate screen
         setChecking(false);
       }
     }
@@ -62,8 +60,7 @@ export default function Home() {
   const handleLogout = () => {
     api.clearToken();
     setUser(null);
-    // Force a re-check in case user was only logged in via token but setup wasn't fully complete
-    // window.location.reload(); // Optional: A hard reload is often cleaner for full logout
+    // Optional: window.location.reload(); // A hard reload is often cleaner for full logout
   };
 
   // Loading state (while checking setup and token)
