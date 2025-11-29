@@ -13,44 +13,54 @@ export default function Home() {
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
 
+  // CRITICAL FIX: Handle initial token loading and check entirely in useEffect
   useEffect(() => {
-    // Function to handle the initial loading sequence (Fixes Q3, Q1, Q2)
-    const initApp = async () => {
-      try {
-        // 1. Check if setup is complete
-        const setupData = await api.get('/api/setup/check');
-        const isSetupComplete = setupData.setupComplete;
-        setSetupComplete(isSetupComplete);
-
-        if (isSetupComplete && api.token) {
-          // 2. If setup is complete AND a token exists, fetch the user object
-          // This call rehydrates the user state, confirming the role (Q1) and limits.
-          const userData = await api.get('/api/user/me');
-          setUser(userData); 
+    async function initialCheck() {
+      // 1. Check for cached token and set it on the API instance
+      if (typeof window !== 'undefined') {
+        const cachedToken = localStorage.getItem('authToken');
+        if (cachedToken) {
+          api.setToken(cachedToken);
         }
-      } catch (err) {
-        console.error('Initial check failed, clearing session:', err.message);
-        // If the token is invalid or the network fails, clear the local session
-        api.clearToken();
-        setUser(null);
-        setSetupComplete(false); // In case the database check itself failed
+      }
+
+      // 2. Perform Setup Check and optionally fetch user data
+      try {
+        const setupData = await api.get('/api/setup/check');
+        setSetupComplete(setupData.setupComplete);
+
+        // If a token was present (and validated by the check above), 
+        // try to get user info immediately to authenticate the session.
+        if (api.token) {
+          try {
+            const userData = await api.get('/api/user/info');
+            setUser(userData.user);
+          } catch (e) {
+            // If token is invalid or expired, clear it
+            api.clearToken();
+            setUser(null);
+          }
+        }
+      } catch (e) {
+        // If the API call itself fails (e.g., worker is down), assume setup is not complete
+        console.error('Initial API check failed:', e);
+        setSetupComplete(false);
       } finally {
         setChecking(false);
       }
-    };
-    
-    initApp();
-  }, []);
+    }
+
+    initialCheck();
+  }, []); // Run only on mount
 
   const handleSetupComplete = (userData) => {
-    // This is called when the setup wizard is completed
+    // Token is set by the SetupWizard itself, but we ensure it here too
     api.setToken(userData.token);
     setUser(userData.user);
     setSetupComplete(true);
   };
 
   const handleAuth = (userData) => {
-    // This is called after successful login or registration
     api.setToken(userData.token);
     setUser(userData.user);
   };
@@ -82,10 +92,11 @@ export default function Home() {
     return <AuthScreen onAuth={handleAuth} />;
   }
 
-  // Dashboard routing (Q1 & Q2 Fix is here via verified user.role)
-  if (user.role === 'super_admin') {
+  // Super Admin Dashboard
+  if (user.role === 'superadmin') {
     return <SuperAdminDashboard user={user} onLogout={handleLogout} />;
-  } else {
-    return <CustomerDashboard user={user} onLogout={handleLogout} />;
   }
+
+  // Customer Dashboard
+  return <CustomerDashboard user={user} onLogout={handleLogout} />;
 }
