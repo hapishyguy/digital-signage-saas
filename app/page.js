@@ -1,4 +1,3 @@
-// app/page.js
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -15,43 +14,43 @@ export default function Home() {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    async function initializeApp() {
+    // Function to handle the initial loading sequence (Fixes Q3, Q1, Q2)
+    const initApp = async () => {
       try {
-        // 1. Check if setup is complete (API endpoint: /api/setup/check)
+        // 1. Check if setup is complete
         const setupData = await api.get('/api/setup/check');
-        setSetupComplete(setupData.setupComplete);
+        const isSetupComplete = setupData.setupComplete;
+        setSetupComplete(isSetupComplete);
 
-        // 2. If setup is complete AND a token is stored, attempt re-authentication
-        if (setupData.setupComplete && api.token) {
-          try {
-            // Attempt to fetch user info using the stored token
-            const userData = await api.get('/api/user/info');
-            setUser(userData); // Hydrate user state with successful response
-          } catch (tokenError) {
-            // If the token is invalid (401), api.js clears it. Force login screen.
-            api.clearToken();
-            setUser(null);
-          }
+        if (isSetupComplete && api.token) {
+          // 2. If setup is complete AND a token exists, fetch the user object
+          // This call rehydrates the user state, confirming the role (Q1) and limits.
+          const userData = await api.get('/api/user/me');
+          setUser(userData); 
         }
       } catch (err) {
-        // Handle API initialization errors (e.g., Worker is down/unreachable)
-        console.error("Initialization error:", err);
-        // Force setup=false if we can't connect, so user can try setup again
-        setSetupComplete(false); 
+        console.error('Initial check failed, clearing session:', err.message);
+        // If the token is invalid or the network fails, clear the local session
+        api.clearToken();
+        setUser(null);
+        setSetupComplete(false); // In case the database check itself failed
       } finally {
         setChecking(false);
       }
-    }
-    initializeApp();
-  }, []); // Runs only once on mount
+    };
+    
+    initApp();
+  }, []);
 
   const handleSetupComplete = (userData) => {
+    // This is called when the setup wizard is completed
     api.setToken(userData.token);
     setUser(userData.user);
     setSetupComplete(true);
   };
 
   const handleAuth = (userData) => {
+    // This is called after successful login or registration
     api.setToken(userData.token);
     setUser(userData.user);
   };
@@ -61,7 +60,7 @@ export default function Home() {
     setUser(null);
   };
 
-  // Loading state (while checking setup and token)
+  // Loading state
   if (checking) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -73,20 +72,20 @@ export default function Home() {
     );
   }
 
-  // 1. Setup wizard (first time only)
+  // Setup wizard (first time only)
   if (!setupComplete) {
     return <SetupWizard onComplete={handleSetupComplete} />;
   }
 
-  // 2. Auth screen (login/signup) if setup is complete and user state is null
+  // Auth screen (login/signup)
   if (!user) {
     return <AuthScreen onAuth={handleAuth} />;
   }
 
-  // 3. Dashboard
-  if (user.role === 'superadmin') {
+  // Dashboard routing (Q1 & Q2 Fix is here via verified user.role)
+  if (user.role === 'super_admin') {
     return <SuperAdminDashboard user={user} onLogout={handleLogout} />;
+  } else {
+    return <CustomerDashboard user={user} onLogout={handleLogout} />;
   }
-  
-  return <CustomerDashboard user={user} onLogout={handleLogout} />;
 }
