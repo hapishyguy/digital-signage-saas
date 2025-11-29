@@ -1,5 +1,4 @@
 // app/page.js
-
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -60,7 +59,6 @@ export default function Home() {
   const handleLogout = () => {
     api.clearToken();
     setUser(null);
-    // Optional: window.location.reload(); // A hard reload is often cleaner for full logout
   };
 
   // Loading state (while checking setup and token)
@@ -80,7 +78,7 @@ export default function Home() {
     return <SetupWizard onComplete={handleSetupComplete} />;
   }
 
-  // 2. Auth screen (login/signup) if user state is null
+  // 2. Auth screen (login/signup) if setup is complete and user state is null
   if (!user) {
     return <AuthScreen onAuth={handleAuth} />;
   }
