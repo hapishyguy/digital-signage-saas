@@ -42,9 +42,11 @@ export default function Home() {
           }
         }
       } catch (e) {
-        // If the API call itself fails (e.g., worker is down), assume setup is not complete
+        // If the API call itself fails (e.g., worker is down, network error), 
+        // We assume setup is complete to avoid the welcome screen loop 
+        // and force the user to the login screen where they can try to authenticate.
         console.error('Initial API check failed:', e);
-        setSetupComplete(false);
+        setSetupComplete(true); // FIX: Assume complete on error to avoid welcome screen loop
       } finally {
         setChecking(false);
       }
@@ -93,7 +95,7 @@ export default function Home() {
   }
 
   // Super Admin Dashboard
-  if (user.role === 'superadmin') {
+  if (user.role === 'super_admin') { // Corrected role name check
     return <SuperAdminDashboard user={user} onLogout={handleLogout} />;
   }
 
